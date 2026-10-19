@@ -3,7 +3,7 @@
 Setup (once):
     modal secret create mybot-secrets \
         TELEGRAM_BOT_TOKEN=... TELEGRAM_CHANNEL_ID=@your_channel \
-        GEMINI_API_KEY=... SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+        GEMINI_API_KEY=... ANTHROPIC_API_KEY=sk-ant-... SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
 Deploy:   modal deploy modal_app.py
 Test now: modal run modal_app.py
 """
@@ -13,7 +13,7 @@ app = modal.App("mybot")
 
 image = (
     modal.Image.debian_slim()
-    .pip_install("requests>=2.31.0", "python-dotenv>=1.0.0")
+    .pip_install("anthropic>=0.40.0", "requests>=2.31.0", "python-dotenv>=1.0.0")
     .add_local_python_source("bot")
 )
 

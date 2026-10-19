@@ -1,4 +1,4 @@
-"""AI trade-signal bot: Gemini analyses Binance futures data and posts
+"""AI trade-signal bot: Gemini and Claude analyse Binance futures data and posts
 signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
 import json
 import os
@@ -14,6 +14,7 @@ load_dotenv()
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MINUTES", "240"))
@@ -97,8 +98,11 @@ Snapshots:
 {data}"""
 
 
-def ask_ai(snaps):
-    prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
+def _extract_json(text):
+    return json.loads(text[text.index("{"): text.rindex("}") + 1])
+
+
+def ask_gemini(prompt):
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
         headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
@@ -106,8 +110,45 @@ def ask_ai(snaps):
               "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
         timeout=90)
     r.raise_for_status()
-    text = "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"])
-    return json.loads(text[text.index("{"): text.rindex("}") + 1])
+    return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
+
+
+def ask_claude(prompt):
+    import anthropic
+    msg = anthropic.Anthropic().messages.create(
+        model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
+    return _extract_json("".join(b.text for b in msg.content if b.type == "text"))
+
+
+def enabled_ais():
+    ais = {}
+    if os.environ.get("GEMINI_API_KEY"):
+        ais["gemini"] = ask_gemini
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        ais["claude"] = ask_claude
+    return ais
+
+
+def ask_ai(snaps):
+    """Ask every configured AI. With two, they must agree on symbol + side; levels are averaged."""
+    prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
+    sigs = {}
+    for name, fn in enabled_ais().items():
+        sig = validate(fn(prompt), snaps)  # each AI's own answer must be valid first
+        print(f"{name}: {sig['symbol']} {sig['side']}")
+        sigs[name] = sig
+    vals = list(sigs.values())
+    if len(vals) == 1:
+        return vals[0]
+    g, c = vals
+    if (g["symbol"], g["side"]) != (c["symbol"], c["side"]):
+        raise ValueError("AIs disagree, no trade")
+    return {
+        "symbol": g["symbol"], "side": g["side"],
+        "entries": [(x + y) / 2 for x, y in zip(g["entries"], c["entries"])],
+        "tp": (g["tp"] + c["tp"]) / 2, "sl": (g["sl"] + c["sl"]) / 2,
+        "reason": " | ".join(f"{n}: {x.get('reason', '')}" for n, x in sigs.items()),
+    }
 
 
 def validate(sig, snaps):
@@ -181,7 +222,7 @@ def run_once(dry=False):
     sig = None
     for attempt in range(3):  # AI output is re-asked if it fails validation
         try:
-            sig = validate(ask_ai(snaps), snaps)
+            sig = validate(ask_ai(snaps), snaps)  # merged signal is re-checked too
             break
         except Exception as ex:
             print(f"attempt {attempt + 1} rejected: {ex}")
@@ -197,8 +238,9 @@ def run_once(dry=False):
 
 def main():
     dry = "--dry" in sys.argv
-    if not os.environ.get("GEMINI_API_KEY"):
-        sys.exit("Set GEMINI_API_KEY (see .env.example)")
+    if not enabled_ais():
+        sys.exit("Set GEMINI_API_KEY and/or ANTHROPIC_API_KEY (see .env.example)")
+    print("AIs:", ", ".join(enabled_ais()))
     if not dry and not (TG_TOKEN and TG_CHANNEL):
         sys.exit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID (see .env.example)")
     if "--once" in sys.argv or dry:
