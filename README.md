@@ -19,3 +19,11 @@ Messages use Cornix's signal format (`#BTC/USDT`, `Long`, `Leverage: Cross (10x)
    member/the Cornix bot per their channel-connect flow) and connect a **demo/testnet** exchange account first.
 2. Set the Cornix trade config to Cross 10x with entries "as given" so the 4 entries are used.
 3. Verify a few posted signals are recognised before going live.
+
+## Hosting on Modal
+```
+pip install modal && python -m modal setup
+modal secret create mybot-secrets TELEGRAM_BOT_TOKEN=... TELEGRAM_CHANNEL_ID=@chan ANTHROPIC_API_KEY=sk-ant-... SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+modal run modal_app.py      # post one signal now
+modal deploy modal_app.py   # run every 4 hours (edit the Cron in modal_app.py)
+```
