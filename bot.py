@@ -13,7 +13,7 @@ load_dotenv()
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MINUTES", "240"))
