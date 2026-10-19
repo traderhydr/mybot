@@ -5,6 +5,7 @@ import os
 import random
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ load_dotenv()
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "180"))
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
@@ -108,14 +110,14 @@ def ask_gemini(prompt):
         headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
         json={"contents": [{"parts": [{"text": prompt}]}],
               "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
-        timeout=90)
+        timeout=AI_TIMEOUT)
     r.raise_for_status()
     return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
 
 
 def ask_claude(prompt):
     import anthropic
-    msg = anthropic.Anthropic(timeout=90, max_retries=1).messages.create(
+    msg = anthropic.Anthropic(timeout=AI_TIMEOUT, max_retries=1).messages.create(
         model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
     return _extract_json("".join(b.text for b in msg.content if b.type == "text"))
 
@@ -132,11 +134,17 @@ def enabled_ais():
 def ask_ai(snaps):
     """Ask every configured AI. With two, they must agree on symbol + side; levels are averaged."""
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
-    sigs = {}
-    for name, fn in enabled_ais().items():
-        sig = validate(fn(prompt), snaps)  # each AI's own answer must be valid first
-        print(f"{name}: {sig['symbol']} {sig['side']}")
-        sigs[name] = sig
+    ais = enabled_ais()
+    with ThreadPoolExecutor(len(ais)) as pool:  # ask all AIs at the same time
+        futures = {name: pool.submit(fn, prompt) for name, fn in ais.items()}
+        sigs = {}
+        for name, fut in futures.items():
+            try:
+                sig = validate(fut.result(), snaps)  # each AI's own answer must be valid first
+            except Exception as ex:
+                raise ValueError(f"{name} failed: {ex}") from ex
+            print(f"{name}: {sig['symbol']} {sig['side']}")
+            sigs[name] = sig
     vals = list(sigs.values())
     if len(vals) == 1:
         return vals[0]
