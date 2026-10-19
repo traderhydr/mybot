@@ -1,4 +1,4 @@
-"""AI trade-signal bot: Gemini and Claude analyse Binance futures data and posts
+"""AI trade-signal bot: Gemini and Claude analyse every Binance futures coin and post
 signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
 import json
 import os
@@ -17,7 +17,11 @@ TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "180"))
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
-SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
+# "ALL" = every USDT perpetual on Binance futures; or a comma list like BTCUSDT,ETHUSDT
+SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "ALL").split(",") if s.strip()]
+MIN_VOLUME = float(os.environ.get("MIN_24H_VOLUME_USDT", "0"))  # skip illiquid coins (0 = keep all)
+MAX_COINS = int(os.environ.get("MAX_COINS", "0"))  # 0 = no cap; otherwise the N most-traded coins
+COIN_DELAY = float(os.environ.get("COIN_DELAY_SECONDS", "3"))  # pause between coins (rate limits)
 TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MINUTES", "240"))
 
@@ -61,6 +65,21 @@ def atr(c, period=14):
     trs = [max(c[i]["h"] - c[i]["l"], abs(c[i]["h"] - c[i - 1]["c"]), abs(c[i]["l"] - c[i - 1]["c"]))
            for i in range(1, len(c))]
     return sum(trs[-period:]) / period
+
+
+def list_symbols():
+    """All trading USDT perpetuals, most-traded first (or the SYMBOLS list from .env)."""
+    if SYMBOLS != ["ALL"]:
+        return SYMBOLS
+    info = requests.get(f"{BINANCE}/fapi/v1/exchangeInfo", timeout=20)
+    info.raise_for_status()
+    live = {x["symbol"] for x in info.json()["symbols"]
+            if x["status"] == "TRADING" and x["contractType"] == "PERPETUAL" and x["quoteAsset"] == "USDT"}
+    tick = requests.get(f"{BINANCE}/fapi/v1/ticker/24hr", timeout=20)
+    tick.raise_for_status()
+    vol = {t["symbol"]: float(t["quoteVolume"]) for t in tick.json() if t["symbol"] in live}
+    coins = [c for c, v in sorted(vol.items(), key=lambda kv: -kv[1]) if v >= MIN_VOLUME]
+    return coins[:MAX_COINS] if MAX_COINS else coins
 
 
 def snapshot(symbol):
@@ -213,35 +232,45 @@ def format_message(sig):
 # ---------- telegram ----------
 
 def post(text):
-    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                      json={"chat_id": TG_CHANNEL, "text": text}, timeout=15)
-    r.raise_for_status()
-
-
-def run_once(dry=False):
-    snaps = []
-    for s in SYMBOLS:
-        try:
-            snaps.append(snapshot(s))
-        except Exception as ex:
-            print(f"skip {s}: {ex}")
-    if not snaps:
-        raise RuntimeError("no market data")
-    sig = None
-    for attempt in range(3):  # AI output is re-asked if it fails validation
-        try:
-            sig = validate(ask_ai(snaps), snaps)  # merged signal is re-checked too
-            break
-        except Exception as ex:
-            print(f"attempt {attempt + 1} rejected: {ex}")
-    if sig is None:
-        print("no valid signal this round")
+    for _ in range(3):
+        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                          json={"chat_id": TG_CHANNEL, "text": text}, timeout=15)
+        if r.status_code == 429:  # Telegram flood limit: wait as told, then retry
+            time.sleep(r.json().get("parameters", {}).get("retry_after", 5) + 1)
+            continue
+        r.raise_for_status()
         return
-    msg = format_message(sig)
-    print(msg)
-    print(f"reason: {sig.get('reason', '')}")
-    if not dry:
-        post(msg)
+    raise RuntimeError("telegram rate limit")
+
+
+def run_once(dry=False, limit=None):
+    """One cycle: analyse every coin and post a signal for each one that gets a valid setup."""
+    coins = list_symbols()
+    if limit:
+        coins = coins[:limit]
+    print(f"cycle: {len(coins)} coins")
+    posted = 0
+    for i, coin in enumerate(coins, 1):
+        try:
+            snaps = [snapshot(coin)]
+            sig = None
+            for attempt in range(2):  # AI output is re-asked if it fails validation
+                try:
+                    sig = validate(ask_ai(snaps), snaps)  # merged signal is re-checked too
+                    break
+                except Exception as ex:
+                    print(f"[{i}/{len(coins)}] {coin} attempt {attempt + 1} rejected: {ex}")
+            if sig is None:
+                continue
+            msg = format_message(sig)
+            print(f"[{i}/{len(coins)}] {coin}\n{msg}\nreason: {sig.get('reason', '')}")
+            if not dry:
+                post(msg)
+            posted += 1
+        except Exception as ex:
+            print(f"[{i}/{len(coins)}] {coin} error: {ex}")
+        time.sleep(COIN_DELAY)
+    print(f"cycle done: {posted}/{len(coins)} signals")
 
 
 def main():
@@ -251,14 +280,17 @@ def main():
     print("AIs:", ", ".join(enabled_ais()))
     if not dry and not (TG_TOKEN and TG_CHANNEL):
         sys.exit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID (see .env.example)")
+    limit = int(sys.argv[sys.argv.index("--limit") + 1]) if "--limit" in sys.argv else (3 if dry else None)
     if "--once" in sys.argv or dry:
-        return run_once(dry)
+        return run_once(dry, limit)
     while True:
+        started = time.time()
         try:
-            run_once()
+            run_once(limit=limit)
         except Exception as ex:
             print(f"error: {ex}")
-        time.sleep(INTERVAL_MIN * 60 + random.randint(0, 60))
+        # next cycle starts INTERVAL_MIN after this one started (immediately if the cycle ran longer)
+        time.sleep(max(0, INTERVAL_MIN * 60 - (time.time() - started)) + random.randint(0, 30))
 
 
 if __name__ == "__main__":

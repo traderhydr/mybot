@@ -26,7 +26,7 @@ REGION = "eu"
     secrets=[modal.Secret.from_name("mybot-secrets")],
     schedule=modal.Cron("0 */4 * * *"),  # every 4 hours (UTC)
     region=REGION,
-    timeout=300,
+    timeout=6 * 3600,
 )
 def post_signal():
     import bot  # imported here so env vars from the secret are set first
