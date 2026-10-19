@@ -27,3 +27,7 @@ modal secret create mybot-secrets TELEGRAM_BOT_TOKEN=... TELEGRAM_CHANNEL_ID=@ch
 modal run modal_app.py      # post one signal now
 modal deploy modal_app.py   # run every 4 hours (edit the Cron in modal_app.py)
 ```
+
+## DeepSeek instead of Claude
+Set `DEEPSEEK_API_KEY` (from platform.deepseek.com) and the bot uses DeepSeek (`deepseek-chat`, override with
+`DEEPSEEK_MODEL`). If it is not set, Claude is used.

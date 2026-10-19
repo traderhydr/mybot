@@ -1,4 +1,4 @@
-"""AI trade-signal bot: Claude analyses Binance futures data and posts
+"""AI trade-signal bot: Claude or DeepSeek analyses Binance futures data and posts
 signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
 import json
 import os
@@ -6,7 +6,6 @@ import random
 import sys
 import time
 
-import anthropic
 import requests
 from dotenv import load_dotenv
 
@@ -99,12 +98,24 @@ Snapshots:
 
 
 def ask_ai(snaps):
-    client = anthropic.Anthropic()
-    msg = client.messages.create(
-        model=MODEL, max_tokens=800,
-        messages=[{"role": "user", "content": PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))}],
-    )
-    text = "".join(b.text for b in msg.content if b.type == "text")
+    prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
+    ds_key = os.environ.get("DEEPSEEK_API_KEY")
+    if ds_key:  # DeepSeek (OpenAI-compatible API)
+        r = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {ds_key}"},
+            json={"model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+                  "messages": [{"role": "user", "content": prompt}],
+                  "response_format": {"type": "json_object"},
+                  "max_tokens": 800},
+            timeout=60)
+        r.raise_for_status()
+        text = r.json()["choices"][0]["message"]["content"]
+    else:  # Claude
+        import anthropic
+        msg = anthropic.Anthropic().messages.create(
+            model=MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
+        text = "".join(b.text for b in msg.content if b.type == "text")
     return json.loads(text[text.index("{"): text.rindex("}") + 1])
 
 

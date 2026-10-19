@@ -3,7 +3,7 @@
 Setup (once):
     modal secret create mybot-secrets \
         TELEGRAM_BOT_TOKEN=... TELEGRAM_CHANNEL_ID=@your_channel \
-        ANTHROPIC_API_KEY=sk-ant-... SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+        ANTHROPIC_API_KEY=sk-ant-... (or DEEPSEEK_API_KEY=...) SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
 Deploy:   modal deploy modal_app.py
 Test now: modal run modal_app.py
 """
