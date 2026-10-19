@@ -4,6 +4,7 @@ import json
 import os
 import random
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -16,6 +17,7 @@ TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "180"))
+GEMINI_RPM = float(os.environ.get("GEMINI_RPM", "8"))  # max Gemini requests per minute
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 # "ALL" = every USDT perpetual on Binance futures; or a comma list like BTCUSDT,ETHUSDT
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "ALL").split(",") if s.strip()]
@@ -123,10 +125,24 @@ def _extract_json(text):
     return json.loads(text[text.index("{"): text.rindex("}") + 1])
 
 
+_gemini_lock = threading.Lock()
+_gemini_last = [0.0]
+
+
+def _gemini_pace():
+    """Keep Gemini calls at most GEMINI_RPM per minute (free tiers allow only a few)."""
+    with _gemini_lock:
+        gap = 60.0 / GEMINI_RPM - (time.time() - _gemini_last[0])
+        if gap > 0:
+            time.sleep(gap)
+        _gemini_last[0] = time.time()
+
+
 def ask_gemini(prompt):
     last = None
-    for wait in (0, 5, 15, 30):  # retry overloads (503), rate limits (429) and timeouts
+    for wait in (0, 20, 45, 90):  # retry overloads (503), rate limits (429) and timeouts
         time.sleep(wait)
+        _gemini_pace()
         try:
             r = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
@@ -136,6 +152,8 @@ def ask_gemini(prompt):
                 timeout=AI_TIMEOUT)
             if r.status_code in (429, 500, 502, 503, 504):
                 last = RuntimeError(f"HTTP {r.status_code}")
+                if r.status_code == 429 and r.headers.get("Retry-After", "").isdigit():
+                    time.sleep(min(int(r.headers["Retry-After"]), 120))
                 continue
             r.raise_for_status()
             return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
