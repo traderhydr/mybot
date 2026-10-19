@@ -101,7 +101,10 @@ Snapshots:
 def ask_ai(snaps):
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
     ds_key = os.environ.get("DEEPSEEK_API_KEY")
-    oa_base = os.environ.get("OPENAI_BASE_URL")
+    oa_base = os.environ.get("OPENAI_BASE_URL") if os.environ.get("OPENAI_MODEL") else None
+    provider = ("openai-compatible" if oa_base else "puter" if os.environ.get("PUTER_AUTH_TOKEN")
+                else "gemini" if os.environ.get("GEMINI_API_KEY") else "deepseek" if ds_key else "claude")
+    print(f"AI provider: {provider}")
     if oa_base:  # any OpenAI-compatible endpoint
         r = requests.post(
             oa_base.rstrip("/") + "/chat/completions",
