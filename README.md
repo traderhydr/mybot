@@ -31,3 +31,7 @@ modal deploy modal_app.py   # run every 4 hours (edit the Cron in modal_app.py)
 ## DeepSeek instead of Claude
 Set `DEEPSEEK_API_KEY` (from platform.deepseek.com) and the bot uses DeepSeek (`deepseek-chat`, override with
 `DEEPSEEK_MODEL`). If it is not set, Claude is used.
+
+## Any OpenAI-compatible API
+Set `OPENAI_BASE_URL` (up to and including `/v1`), `OPENAI_API_KEY` and `OPENAI_MODEL`. Priority: OpenAI-compatible,
+then DeepSeek, then Claude.

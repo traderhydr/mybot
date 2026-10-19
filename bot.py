@@ -100,7 +100,18 @@ Snapshots:
 def ask_ai(snaps):
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
     ds_key = os.environ.get("DEEPSEEK_API_KEY")
-    if ds_key:  # DeepSeek (OpenAI-compatible API)
+    oa_base = os.environ.get("OPENAI_BASE_URL")
+    if oa_base:  # any OpenAI-compatible endpoint
+        r = requests.post(
+            oa_base.rstrip("/") + "/chat/completions",
+            headers={"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}"},
+            json={"model": os.environ["OPENAI_MODEL"],
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_completion_tokens": 1024},
+            timeout=90)
+        r.raise_for_status()
+        text = r.json()["choices"][0]["message"]["content"]
+    elif ds_key:  # DeepSeek (OpenAI-compatible API)
         r = requests.post(
             "https://api.deepseek.com/chat/completions",
             headers={"Authorization": f"Bearer {ds_key}"},
