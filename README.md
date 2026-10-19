@@ -11,3 +11,11 @@ It only *posts* signals; it does not place orders.
 2. `pip install -r requirements.txt`
 3. `cp .env.example .env` and fill in the keys.
 4. `python bot.py --dry` – prints a signal without posting. `python bot.py --once` posts one. `python bot.py` runs on a loop (`INTERVAL_MINUTES`).
+
+## Cornix
+Messages use Cornix's signal format (`#BTC/USDT`, `Long`, `Leverage: Cross (10x)`, `Entry Targets`,
+`Take-Profit Targets`, `Stop Targets`), so Cornix can parse and execute them.
+1. In Cornix, create a signals group/bot linked to your channel (add your Cornix-connected account as a channel
+   member/the Cornix bot per their channel-connect flow) and connect a **demo/testnet** exchange account first.
+2. Set the Cornix trade config to Cross 10x with entries "as given" so the 4 entries are used.
+3. Verify a few posted signals are recognised before going live.

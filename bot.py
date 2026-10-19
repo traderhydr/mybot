@@ -135,36 +135,35 @@ def validate(sig, snaps):
 
 
 def fmt(x):
-    return f"{x:.8g}" if x < 1 else f"{x:,.4f}".rstrip("0").rstrip(".")
+    """Plain decimal, no thousands separators or exponents (Cornix can't parse those)."""
+    return f"{x:.8f}".rstrip("0").rstrip(".")
 
 
 def format_message(sig):
-    icon = "🟢" if sig["side"] == "LONG" else "🔴"
+    """Cornix-compatible signal format. Keep it plain text with no extra numbers."""
+    base = sig["symbol"][:-4] if sig["symbol"].endswith("USDT") else sig["symbol"]
     e = sig["entries"]
-    avg = sum(e) / 4
-    rr = abs(sig["tp"] - avg) / abs(avg - sig["sl"])
-    lines = [
-        f"{icon} <b>#{sig['symbol']} {sig['side']}</b>",
-        f"⚙️ {MARGIN_MODE} {LEVERAGE}x",
+    return "\n".join([
+        f"#{base}/USDT",
+        sig["side"].capitalize(),
+        f"Leverage: {MARGIN_MODE} ({LEVERAGE}x)",
         "",
-        "<b>Entries</b>",
-        *[f"  {i}) <code>{fmt(x)}</code>" for i, x in enumerate(e, 1)],
+        "Entry Targets:",
+        *[f"{i}) {fmt(x)}" for i, x in enumerate(e, 1)],
         "",
-        f"🎯 <b>TP:</b> <code>{fmt(sig['tp'])}</code>",
-        f"🛑 <b>SL:</b> <code>{fmt(sig['sl'])}</code>",
-        f"📐 R:R ≈ {rr:.2f} (avg entry)",
-    ]
-    if sig.get("reason"):
-        lines += ["", f"💡 {sig['reason']}"]
-    lines += ["", "<i>AI-generated, not financial advice. Trade at your own risk.</i>"]
-    return "\n".join(lines)
+        "Take-Profit Targets:",
+        f"1) {fmt(sig['tp'])}",
+        "",
+        "Stop Targets:",
+        f"1) {fmt(sig['sl'])}",
+    ])
 
 
 # ---------- telegram ----------
 
 def post(text):
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                      json={"chat_id": TG_CHANNEL, "text": text, "parse_mode": "HTML"}, timeout=15)
+                      json={"chat_id": TG_CHANNEL, "text": text}, timeout=15)
     r.raise_for_status()
 
 
@@ -189,6 +188,7 @@ def run_once(dry=False):
         return
     msg = format_message(sig)
     print(msg)
+    print(f"reason: {sig.get('reason', '')}")
     if not dry:
         post(msg)
 
