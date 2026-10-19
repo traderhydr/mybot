@@ -115,7 +115,7 @@ def ask_gemini(prompt):
 
 def ask_claude(prompt):
     import anthropic
-    msg = anthropic.Anthropic().messages.create(
+    msg = anthropic.Anthropic(timeout=90, max_retries=1).messages.create(
         model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
     return _extract_json("".join(b.text for b in msg.content if b.type == "text"))
 
