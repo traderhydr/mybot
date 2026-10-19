@@ -1,0 +1,211 @@
+"""AI trade-signal bot: Claude analyses Binance futures data and posts
+signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
+import json
+import os
+import random
+import sys
+import time
+
+import anthropic
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
+MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
+TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
+INTERVAL_MIN = int(os.environ.get("INTERVAL_MINUTES", "240"))
+
+LEVERAGE = 10
+MARGIN_MODE = "Cross"
+BINANCE = "https://fapi.binance.com"
+
+
+# ---------- market data ----------
+
+def fetch_candles(symbol, limit=200):
+    r = requests.get(f"{BINANCE}/fapi/v1/klines",
+                     params={"symbol": symbol, "interval": TIMEFRAME, "limit": limit}, timeout=15)
+    r.raise_for_status()
+    return [{"o": float(k[1]), "h": float(k[2]), "l": float(k[3]), "c": float(k[4]), "v": float(k[5])}
+            for k in r.json()]
+
+
+def ema(values, period):
+    k, out = 2 / (period + 1), values[0]
+    for v in values[1:]:
+        out = v * k + out * (1 - k)
+    return out
+
+
+def rsi(closes, period=14):
+    gains = losses = 0.0
+    for i in range(1, period + 1):
+        d = closes[i] - closes[i - 1]
+        gains += max(d, 0)
+        losses += max(-d, 0)
+    ag, al = gains / period, losses / period
+    for i in range(period + 1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        ag = (ag * (period - 1) + max(d, 0)) / period
+        al = (al * (period - 1) + max(-d, 0)) / period
+    return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+
+def atr(c, period=14):
+    trs = [max(c[i]["h"] - c[i]["l"], abs(c[i]["h"] - c[i - 1]["c"]), abs(c[i]["l"] - c[i - 1]["c"]))
+           for i in range(1, len(c))]
+    return sum(trs[-period:]) / period
+
+
+def snapshot(symbol):
+    c = fetch_candles(symbol)
+    closes = [x["c"] for x in c]
+    return {
+        "symbol": symbol,
+        "timeframe": TIMEFRAME,
+        "price": closes[-1],
+        "ema20": round(ema(closes, 20), 6),
+        "ema50": round(ema(closes, 50), 6),
+        "ema200": round(ema(closes, 200), 6),
+        "rsi14": round(rsi(closes), 2),
+        "atr14": round(atr(c), 6),
+        "high_50": max(x["h"] for x in c[-50:]),
+        "low_50": min(x["l"] for x in c[-50:]),
+        "last_10_closes": closes[-10:],
+    }
+
+
+# ---------- AI ----------
+
+PROMPT = """You are a crypto futures analyst. Given the market snapshots below, pick the ONE
+best setup (long or short) and return it as strict JSON, nothing else:
+
+{{"symbol": "...", "side": "LONG"|"SHORT", "entries": [e1, e2, e3, e4], "tp": number, "sl": number, "reason": "<=200 chars"}}
+
+Rules:
+- Exactly 4 entry prices (a scaled/laddered entry): e1 closest to current price, each next one further away.
+- For LONG: entries descend, below or at current price; tp above all entries; sl below all entries.
+- For SHORT: entries ascend, above or at current price; tp below all entries; sl above all entries.
+- Exactly ONE take-profit. Leverage is fixed at {lev}x cross, so keep the SL tight enough that the
+  loss at the last entry stays modest (use ATR; roughly 0.5-1.5 ATR beyond the last entry).
+- Use realistic prices for the symbol's price scale.
+
+Snapshots:
+{data}"""
+
+
+def ask_ai(snaps):
+    client = anthropic.Anthropic()
+    msg = client.messages.create(
+        model=MODEL, max_tokens=800,
+        messages=[{"role": "user", "content": PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))}],
+    )
+    text = "".join(b.text for b in msg.content if b.type == "text")
+    return json.loads(text[text.index("{"): text.rindex("}") + 1])
+
+
+def validate(sig, snaps):
+    """Reject anything that doesn't have 4 entries / 1 TP / SL in a sane order."""
+    price = {s["symbol"]: s["price"] for s in snaps}
+    if sig.get("symbol") not in price:
+        raise ValueError("unknown symbol")
+    side = sig.get("side")
+    e, tp, sl = sig.get("entries"), sig.get("tp"), sig.get("sl")
+    if side not in ("LONG", "SHORT") or not isinstance(e, list) or len(e) != 4:
+        raise ValueError("need side and exactly 4 entries")
+    e = [float(x) for x in e]
+    tp, sl = float(tp), float(sl)
+    p = price[sig["symbol"]]
+    if side == "LONG":
+        ok = e == sorted(e, reverse=True) and len(set(e)) == 4 and sl < e[-1] and tp > e[0] and e[0] <= p * 1.002
+    else:
+        ok = e == sorted(e) and len(set(e)) == 4 and sl > e[-1] and tp < e[0] and e[0] >= p * 0.998
+    if not ok:
+        raise ValueError("price levels inconsistent with side")
+    # sanity: loss at SL must stay under 50% of margin at 10x (~5% price move)
+    avg = sum(e) / 4
+    if abs(avg - sl) / avg * LEVERAGE >= 0.5:
+        raise ValueError("SL too wide for 10x")
+    sig.update(entries=e, tp=tp, sl=sl)
+    return sig
+
+
+def fmt(x):
+    return f"{x:.8g}" if x < 1 else f"{x:,.4f}".rstrip("0").rstrip(".")
+
+
+def format_message(sig):
+    icon = "🟢" if sig["side"] == "LONG" else "🔴"
+    e = sig["entries"]
+    avg = sum(e) / 4
+    rr = abs(sig["tp"] - avg) / abs(avg - sig["sl"])
+    lines = [
+        f"{icon} <b>#{sig['symbol']} {sig['side']}</b>",
+        f"⚙️ {MARGIN_MODE} {LEVERAGE}x",
+        "",
+        "<b>Entries</b>",
+        *[f"  {i}) <code>{fmt(x)}</code>" for i, x in enumerate(e, 1)],
+        "",
+        f"🎯 <b>TP:</b> <code>{fmt(sig['tp'])}</code>",
+        f"🛑 <b>SL:</b> <code>{fmt(sig['sl'])}</code>",
+        f"📐 R:R ≈ {rr:.2f} (avg entry)",
+    ]
+    if sig.get("reason"):
+        lines += ["", f"💡 {sig['reason']}"]
+    lines += ["", "<i>AI-generated, not financial advice. Trade at your own risk.</i>"]
+    return "\n".join(lines)
+
+
+# ---------- telegram ----------
+
+def post(text):
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                      json={"chat_id": TG_CHANNEL, "text": text, "parse_mode": "HTML"}, timeout=15)
+    r.raise_for_status()
+
+
+def run_once(dry=False):
+    snaps = []
+    for s in SYMBOLS:
+        try:
+            snaps.append(snapshot(s))
+        except Exception as ex:
+            print(f"skip {s}: {ex}")
+    if not snaps:
+        raise RuntimeError("no market data")
+    sig = None
+    for attempt in range(3):  # AI output is re-asked if it fails validation
+        try:
+            sig = validate(ask_ai(snaps), snaps)
+            break
+        except Exception as ex:
+            print(f"attempt {attempt + 1} rejected: {ex}")
+    if sig is None:
+        print("no valid signal this round")
+        return
+    msg = format_message(sig)
+    print(msg)
+    if not dry:
+        post(msg)
+
+
+def main():
+    dry = "--dry" in sys.argv
+    if not dry and not (TG_TOKEN and TG_CHANNEL):
+        sys.exit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID (see .env.example)")
+    if "--once" in sys.argv or dry:
+        return run_once(dry)
+    while True:
+        try:
+            run_once()
+        except Exception as ex:
+            print(f"error: {ex}")
+        time.sleep(INTERVAL_MIN * 60 + random.randint(0, 60))
+
+
+if __name__ == "__main__":
+    main()
