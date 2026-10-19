@@ -118,6 +118,16 @@ def ask_ai(snaps):
         if p.returncode != 0:
             raise RuntimeError(f"puter: {p.stderr.strip()}")
         text = p.stdout
+    elif os.environ.get("GEMINI_API_KEY"):  # Google Gemini
+        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
+            timeout=90)
+        r.raise_for_status()
+        text = "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"])
     elif ds_key:  # DeepSeek (OpenAI-compatible API)
         r = requests.post(
             "https://api.deepseek.com/chat/completions",

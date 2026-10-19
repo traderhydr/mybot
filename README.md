@@ -44,3 +44,6 @@ npm install
 node puter_ai.cjs --login      # on a machine with a browser; prints your auth token
 ```
 Put the token in `.env` as `PUTER_AUTH_TOKEN=...` and run `python bot.py --dry`.
+
+## Gemini
+Get a key at aistudio.google.com/apikey, set `GEMINI_API_KEY` (optionally `GEMINI_MODEL`, default `gemini-2.5-flash`).
