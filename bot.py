@@ -3,6 +3,7 @@ signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
 import json
 import os
 import random
+import subprocess
 import sys
 import time
 
@@ -111,6 +112,12 @@ def ask_ai(snaps):
             timeout=90)
         r.raise_for_status()
         text = r.json()["choices"][0]["message"]["content"]
+    elif os.environ.get("PUTER_AUTH_TOKEN"):  # Claude via Puter.js (Node helper)
+        p = subprocess.run(["node", os.path.join(os.path.dirname(os.path.abspath(__file__)), "puter_ai.cjs")],
+                           input=prompt, capture_output=True, text=True, timeout=120)
+        if p.returncode != 0:
+            raise RuntimeError(f"puter: {p.stderr.strip()}")
+        text = p.stdout
     elif ds_key:  # DeepSeek (OpenAI-compatible API)
         r = requests.post(
             "https://api.deepseek.com/chat/completions",

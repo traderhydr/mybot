@@ -35,3 +35,12 @@ Set `DEEPSEEK_API_KEY` (from platform.deepseek.com) and the bot uses DeepSeek (`
 ## Any OpenAI-compatible API
 Set `OPENAI_BASE_URL` (up to and including `/v1`), `OPENAI_API_KEY` and `OPENAI_MODEL`. Priority: OpenAI-compatible,
 then DeepSeek, then Claude.
+
+## Claude via Puter.js
+Needs Node.js 18+ and a Puter account (usage is billed to that account's allowance; there is no truly keyless
+mode outside a browser).
+```
+npm install
+node puter_ai.cjs --login      # on a machine with a browser; prints your auth token
+```
+Put the token in `.env` as `PUTER_AUTH_TOKEN=...` and run `python bot.py --dry`.
