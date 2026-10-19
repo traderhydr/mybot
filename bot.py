@@ -124,19 +124,29 @@ def _extract_json(text):
 
 
 def ask_gemini(prompt):
-    r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-        headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
-        json={"contents": [{"parts": [{"text": prompt}]}],
-              "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
-        timeout=AI_TIMEOUT)
-    r.raise_for_status()
-    return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
+    last = None
+    for wait in (0, 5, 15, 30):  # retry overloads (503), rate limits (429) and timeouts
+        time.sleep(wait)
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
+                json={"contents": [{"parts": [{"text": prompt}]}],
+                      "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
+                timeout=AI_TIMEOUT)
+            if r.status_code in (429, 500, 502, 503, 504):
+                last = RuntimeError(f"HTTP {r.status_code}")
+                continue
+            r.raise_for_status()
+            return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
+        except requests.exceptions.Timeout as ex:
+            last = ex
+    raise last
 
 
 def ask_claude(prompt):
     import anthropic
-    msg = anthropic.Anthropic(timeout=AI_TIMEOUT, max_retries=1).messages.create(
+    msg = anthropic.Anthropic(timeout=AI_TIMEOUT, max_retries=3).messages.create(
         model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
     return _extract_json("".join(b.text for b in msg.content if b.type == "text"))
 
