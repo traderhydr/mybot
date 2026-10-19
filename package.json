@@ -1,5 +1,0 @@
-{
-  "name": "mybot",
-  "private": true,
-  "dependencies": { "@heyputer/puter.js": "^2.6.4" }
-}

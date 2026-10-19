@@ -1,9 +1,8 @@
-"""AI trade-signal bot: Claude or DeepSeek analyses Binance futures data and posts
+"""AI trade-signal bot: Gemini analyses Binance futures data and posts
 signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
 import json
 import os
 import random
-import subprocess
 import sys
 import time
 
@@ -14,7 +13,7 @@ load_dotenv()
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",") if s.strip()]
 TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MINUTES", "240"))
@@ -100,53 +99,14 @@ Snapshots:
 
 def ask_ai(snaps):
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
-    ds_key = os.environ.get("DEEPSEEK_API_KEY")
-    oa_base = os.environ.get("OPENAI_BASE_URL") if os.environ.get("OPENAI_MODEL") else None
-    provider = ("openai-compatible" if oa_base else "puter" if os.environ.get("PUTER_AUTH_TOKEN")
-                else "gemini" if os.environ.get("GEMINI_API_KEY") else "deepseek" if ds_key else "claude")
-    print(f"AI provider: {provider}")
-    if oa_base:  # any OpenAI-compatible endpoint
-        r = requests.post(
-            oa_base.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}"},
-            json={"model": os.environ["OPENAI_MODEL"],
-                  "messages": [{"role": "user", "content": prompt}],
-                  "max_completion_tokens": 1024},
-            timeout=90)
-        r.raise_for_status()
-        text = r.json()["choices"][0]["message"]["content"]
-    elif os.environ.get("PUTER_AUTH_TOKEN"):  # Claude via Puter.js (Node helper)
-        p = subprocess.run(["node", os.path.join(os.path.dirname(os.path.abspath(__file__)), "puter_ai.cjs")],
-                           input=prompt, capture_output=True, text=True, timeout=120)
-        if p.returncode != 0:
-            raise RuntimeError(f"puter: {p.stderr.strip()}")
-        text = p.stdout
-    elif os.environ.get("GEMINI_API_KEY"):  # Google Gemini
-        model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
-            json={"contents": [{"parts": [{"text": prompt}]}],
-                  "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
-            timeout=90)
-        r.raise_for_status()
-        text = "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"])
-    elif ds_key:  # DeepSeek (OpenAI-compatible API)
-        r = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={"Authorization": f"Bearer {ds_key}"},
-            json={"model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
-                  "messages": [{"role": "user", "content": prompt}],
-                  "response_format": {"type": "json_object"},
-                  "max_tokens": 800},
-            timeout=60)
-        r.raise_for_status()
-        text = r.json()["choices"][0]["message"]["content"]
-    else:  # Claude
-        import anthropic
-        msg = anthropic.Anthropic().messages.create(
-            model=MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
-        text = "".join(b.text for b in msg.content if b.type == "text")
+    r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
+        json={"contents": [{"parts": [{"text": prompt}]}],
+              "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
+        timeout=90)
+    r.raise_for_status()
+    text = "".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"])
     return json.loads(text[text.index("{"): text.rindex("}") + 1])
 
 
@@ -237,6 +197,8 @@ def run_once(dry=False):
 
 def main():
     dry = "--dry" in sys.argv
+    if not os.environ.get("GEMINI_API_KEY"):
+        sys.exit("Set GEMINI_API_KEY (see .env.example)")
     if not dry and not (TG_TOKEN and TG_CHANNEL):
         sys.exit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID (see .env.example)")
     if "--once" in sys.argv or dry:
