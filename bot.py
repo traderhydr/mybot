@@ -18,7 +18,7 @@ TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "180"))
 GEMINI_RPM = float(os.environ.get("GEMINI_RPM", "8"))  # max Gemini requests per minute
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-5-5")
 # "ALL" = every USDT perpetual on Binance futures; or a comma list like BTCUSDT,ETHUSDT
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "ALL").split(",") if s.strip()]
 MIN_VOLUME = float(os.environ.get("MIN_24H_VOLUME_USDT", "0"))  # skip illiquid coins (0 = keep all)
