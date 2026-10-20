@@ -18,6 +18,7 @@ TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "180"))
 GEMINI_RPM = float(os.environ.get("GEMINI_RPM", "8"))  # max Gemini requests per minute
+GEMINI_COOLDOWN = int(os.environ.get("GEMINI_COOLDOWN_MINUTES", "30")) * 60  # pause Gemini after it keeps rate-limiting
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-5-5")
 # "ALL" = every USDT perpetual on Binance futures; or a comma list like BTCUSDT,ETHUSDT
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "ALL").split(",") if s.strip()]
@@ -127,6 +128,7 @@ def _extract_json(text):
 
 _gemini_lock = threading.Lock()
 _gemini_last = [0.0]
+_gemini_blocked_until = [0.0]
 
 
 def _gemini_pace():
@@ -138,7 +140,13 @@ def _gemini_pace():
         _gemini_last[0] = time.time()
 
 
+def gemini_blocked():
+    return time.time() < _gemini_blocked_until[0]
+
+
 def ask_gemini(prompt):
+    if gemini_blocked():
+        raise RuntimeError("Gemini cooling down after rate limits")
     last = None
     for wait in (0, 20, 45, 90):  # retry overloads (503), rate limits (429) and timeouts
         time.sleep(wait)
@@ -159,6 +167,9 @@ def ask_gemini(prompt):
             return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
         except requests.exceptions.Timeout as ex:
             last = ex
+    if "429" in str(last):  # quota is gone: stop hammering it for a while
+        _gemini_blocked_until[0] = time.time() + GEMINI_COOLDOWN
+        print(f"Gemini rate-limited, pausing it for {GEMINI_COOLDOWN // 60} min")
     raise last
 
 
@@ -182,6 +193,8 @@ def ask_ai(snaps):
     """Ask every configured AI. With two, they must agree on symbol + side; levels are averaged."""
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
     ais = enabled_ais()
+    if "gemini" in ais and gemini_blocked():  # don't pay for Claude when the pair can't complete
+        raise ValueError("Gemini cooling down, skipping")
     with ThreadPoolExecutor(len(ais)) as pool:  # ask all AIs at the same time
         futures = {name: pool.submit(fn, prompt) for name, fn in ais.items()}
         sigs = {}
