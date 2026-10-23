@@ -86,7 +86,10 @@ def list_symbols():
 
 
 def snapshot(symbol):
-    c = fetch_candles(symbol)
+    return snapshot_from_candles(symbol, fetch_candles(symbol))
+
+
+def snapshot_from_candles(symbol, c):
     closes = [x["c"] for x in c]
     return {
         "symbol": symbol,

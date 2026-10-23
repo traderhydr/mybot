@@ -1,3 +1,5 @@
 .env
 __pycache__/
 *.pyc
+backtest_cache.jsonl
+backtest_results.csv
