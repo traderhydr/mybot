@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import os
+import random
 import statistics
 import sys
 import time
@@ -96,6 +97,15 @@ def mirror(sig, price):
             "entries": [r(e) for e in sig["entries"]], "tp": r(sig["tp"]), "sl": r(sig["sl"])}
 
 
+def with_side(sig, price, side):
+    """The AI's ladder geometry (distances from price) applied to a fixed side: the control trades."""
+    d_e = [abs(e - price) for e in sig["entries"]]
+    d_tp, d_sl = abs(sig["tp"] - price), abs(sig["sl"] - price)
+    if side == "SHORT":
+        return {"side": side, "entries": [price + d for d in d_e], "tp": price - d_tp, "sl": price + d_sl}
+    return {"side": side, "entries": [price - d for d in d_e], "tp": price + d_tp, "sl": price - d_sl}
+
+
 # ---------- signal sources ----------
 
 def rule_signal(snap):
@@ -160,32 +170,46 @@ def load_cache():
 
 # ---------- report ----------
 
-def summarize(rows, title):
+def stats(rows):
     done = [r for r in rows if r["outcome"] in ("tp", "sl", "expired")]
-    print(f"\n=== {title} ===")
-    print(f"signals {len(rows)} | traded {len(done)} | cancelled {sum(r['outcome']=='cancelled' for r in rows)}"
-          f" | never filled {sum(r['outcome']=='nofill' for r in rows)}")
     if not done:
+        return None
+    rets = [r["ret_alloc"] for r in done]
+    wins, losses = [x for x in rets if x > 0], [x for x in rets if x <= 0]
+    return {"n": len(done), "shorts": sum(r["side"] == "SHORT" for r in done) / len(done),
+            "win": len(wins) / len(done), "pf": (sum(wins) / -sum(losses)) if losses and sum(losses) else float("inf"),
+            "avg": statistics.mean(rets), "se": statistics.stdev(rets) / len(rets) ** 0.5 if len(rets) > 1 else 0.0,
+            "total": sum(rets), "avg_win": statistics.mean(wins) if wins else 0.0,
+            "avg_loss": statistics.mean(losses) if losses else 0.0,
+            "tp": sum(r["outcome"] == "tp" for r in done), "sl": sum(r["outcome"] == "sl" for r in done),
+            "expired": sum(r["outcome"] == "expired" for r in done)}
+
+
+def report(variants):
+    sig = variants["signal"]
+    st = stats(sig)
+    print(f"\nsignals {len(sig)} | cancelled {sum(r['outcome'] == 'cancelled' for r in sig)}"
+          f" | never filled {sum(r['outcome'] == 'nofill' for r in sig)}")
+    if not st:
+        print("no completed trades")
         return
-    wins = [r["ret_alloc"] for r in done if r["ret_alloc"] > 0]
-    losses = [r["ret_alloc"] for r in done if r["ret_alloc"] <= 0]
-    out = {o: sum(r["outcome"] == o for r in done) for o in ("tp", "sl", "expired")}
-    print(f"outcomes: TP {out['tp']} | SL {out['sl']} | expired {out['expired']}")
-    print(f"win rate {len(wins) / len(done):.0%} | avg win {statistics.mean(wins) if wins else 0:+.1f}%"
-          f" | avg loss {statistics.mean(losses) if losses else 0:+.1f}%"
-          f" | profit factor {(sum(wins) / -sum(losses)) if losses and sum(losses) else float('inf'):.2f}")
-    total = sum(r["ret_alloc"] for r in done)
-    cum, peak, mdd = 0.0, 0.0, 0.0
-    for r in sorted(done, key=lambda r: r["t"]):
-        cum += r["ret_alloc"]
-        peak = max(peak, cum)
-        mdd = max(mdd, peak - cum)
-    print(f"total {total:+.0f}% of one trade's margin | avg per trade {total / len(done):+.2f}% | max drawdown {mdd:.0f}%")
-    for side in ("LONG", "SHORT"):
-        s = [r for r in done if r["side"] == side]
-        if s:
-            print(f"  {side}: {len(s)} trades, win rate {sum(r['ret_alloc'] > 0 for r in s) / len(s):.0%},"
-                  f" avg {statistics.mean(r['ret_alloc'] for r in s):+.2f}%")
+    print(f"AI trades: {st['n']} | TP {st['tp']} | SL {st['sl']} | expired {st['expired']} | "
+          f"avg win {st['avg_win']:+.1f}% | avg loss {st['avg_loss']:+.1f}%")
+    print(f"\n{'variant':14s}{'trades':>7s}{'%short':>8s}{'win%':>6s}{'PF':>6s}{'avg/trade (±SE)':>20s}{'total':>9s}")
+    labels = {"signal": "AI", "mirror": "AI flipped", "always_short": "always SHORT",
+              "always_long": "always LONG", "random": "random side"}
+    for v, rows in variants.items():
+        x = stats(rows)
+        if x:
+            print(f"{labels[v]:14s}{x['n']:7d}{x['shorts']:8.0%}{x['win']:6.0%}{x['pf']:6.2f}"
+                  f"{x['avg']:+12.2f}% ±{x['se']:4.2f}{x['total']:+9.0f}%")
+    print("\nAI minus control, per signal, same points and same ladder geometry (z>2 = unlikely to be luck):")
+    for v in ("mirror", "always_short", "always_long", "random"):
+        diffs = [a["ret_alloc"] - b["ret_alloc"] for a, b in zip(sig, variants[v])]
+        if len(diffs) > 1:
+            m, se = statistics.mean(diffs), statistics.stdev(diffs) / len(diffs) ** 0.5
+            print(f"  vs {labels[v]:13s} {m:+6.2f}% ± {se:4.2f}   z = {m / se if se else 0:+.1f}")
+    print("Trades overlap in time, so true uncertainty is larger than these SEs suggest.")
 
 
 def main():
@@ -229,7 +253,7 @@ def main():
         if new and not a.yes:
             sys.exit("Re-run with --yes to spend them (results are cached, so a stop/resume costs nothing extra).")
 
-    rows, mrows = [], []
+    variants = {v: [] for v in ("signal", "mirror", "always_short", "always_long", "random")}
     for n, (sym, i) in enumerate(points, 1):
         c = data[sym]
         snap = bot.snapshot_from_candles(sym, c[i - WARMUP + 1:i + 1])
@@ -240,22 +264,28 @@ def main():
         if sig in (None, "SKIP"):
             continue
         fwd = c[i + 1:i + 1 + expiry]
-        base = {"symbol": sym, "t": t, "price": snap["price"]}
-        res = simulate(sig["side"], sig["entries"], sig["tp"], sig["sl"], fwd, a.fee)
-        rows.append({**base, "side": sig["side"], "entries": sig["entries"], "tp": sig["tp"], "sl": sig["sl"], **res})
-        m = mirror(sig, snap["price"])
-        mres = simulate(m["side"], m["entries"], m["tp"], m["sl"], fwd, a.fee)
-        mrows.append({**base, **m, **mres})
+        price = snap["price"]
+        base = {"symbol": sym, "t": t, "price": price}
+        opposite = "LONG" if sig["side"] == "SHORT" else "SHORT"
+        trades = {"signal": sig,
+                  "mirror": with_side(sig, price, opposite),
+                  "always_short": with_side(sig, price, "SHORT"),
+                  "always_long": with_side(sig, price, "LONG"),
+                  "random": with_side(sig, price, random.Random(f"{sym}{t}").choice(["LONG", "SHORT"]))}
+        for v, tr in trades.items():
+            res = simulate(tr["side"], tr["entries"], tr["tp"], tr["sl"], fwd, a.fee)
+            variants[v].append({**base, "side": tr["side"], "entries": tr["entries"], "tp": tr["tp"],
+                                "sl": tr["sl"], **res})
 
+    rows = variants["signal"]
     with open(a.out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]) + ["variant"]) if rows else None
-        if w:
+        if rows:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]) + ["variant"])
             w.writeheader()
-            for v, rs in (("signal", rows), ("mirror", mrows)):
+            for v, rs in variants.items():
                 for r in rs:
                     w.writerow({**r, "variant": v})
-    summarize(rows, f"BOT SIGNALS ({a.ai})")
-    summarize(mrows, "CONTROL: same trades flipped to the opposite side")
+    report(variants)
     print(f"\nrows saved to {a.out}. Caveats: candle-level simulation, no slippage/funding, equal margin per trade,"
           " trades treated independently.")
 

@@ -26,6 +26,7 @@ modal deploy modal_app.py   # every 4 hours
 `python backtest.py --ai rule --days 30` runs a free EMA-trend baseline for comparison (no AI calls).
 `python backtest.py --ai bot --coins 10 --days 14 --step-hours 12 --yes` replays your real AI setup on past candles
 (each point = same snapshot, prompt and validation as live) and simulates the 4-entry ladder, TP, SL and a 48h expiry.
-Results are cached in `backtest_cache.jsonl` (stop/resume safely) and written to `backtest_results.csv`. It also runs a
-control with every trade flipped to the opposite side: if the AI has an edge, it should clearly beat that control.
+Results are cached in `backtest_cache.jsonl` (stop/resume safely) and written to `backtest_results.csv`. It also runs
+controls on the same points with the same ladder geometry: AI flipped, always SHORT, always LONG and a random side,
+and prints a paired AI-minus-control comparison with a z-score. Use `--only claude|gemini` to test a single AI.
 Caveats: candle-level simulation, no slippage/funding, SL wins ties, use recent data (after the AI models' training cutoff).
