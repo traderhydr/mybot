@@ -4,6 +4,7 @@ For many (coin, time) points it builds the same snapshot the live bot sees, asks
 prompt and validation, then simulates the 4-entry ladder / TP / SL on the candles that follow.
 
 Examples:
+  python backtest.py --ai bot --only claude --coins 5 --days 10 --yes   # one AI only (no Gemini quota needed)
   python backtest.py --ai rule --days 30                       # free baseline (no AI calls)
   python backtest.py --ai bot --coins 10 --days 14 --step-hours 12 --yes
 Results are cached in backtest_cache.jsonl so an interrupted run resumes without paying twice.
@@ -199,7 +200,10 @@ def main():
     ap.add_argument("--source", choices=["futures", "spot"], default="futures")
     ap.add_argument("--out", default="backtest_results.csv")
     ap.add_argument("--yes", action="store_true", help="confirm spending AI calls")
+    ap.add_argument("--only", choices=["claude", "gemini"], help="test just one AI instead of the pair")
     a = ap.parse_args()
+    if a.only:  # drop the other AI's key so bot.ask_ai uses a single AI
+        os.environ.pop("GEMINI_API_KEY" if a.only == "claude" else "ANTHROPIC_API_KEY", None)
 
     tf = TF_MS[bot.TIMEFRAME]
     step, expiry = max(1, a.step_hours * 3_600_000 // tf), a.expiry_hours * 3_600_000 // tf
