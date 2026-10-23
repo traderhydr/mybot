@@ -106,6 +106,13 @@ def with_side(sig, price, side):
     return {"side": side, "entries": [price - d for d in d_e], "tp": price + d_tp, "sl": price - d_sl}
 
 
+def fixed_trade(side, price, atr, tp_atr, sl_atr):
+    """One standard ladder for every trade (so only the direction differs): entries 0.1-0.7 ATR from price."""
+    sgn = 1 if side == "SHORT" else -1
+    return {"side": side, "entries": [price + sgn * atr * m for m in (0.1, 0.3, 0.5, 0.7)],
+            "tp": price - sgn * atr * tp_atr, "sl": price + sgn * atr * sl_atr}
+
+
 # ---------- signal sources ----------
 
 def rule_signal(snap):
@@ -185,6 +192,28 @@ def stats(rows):
             "expired": sum(r["outcome"] == "expired" for r in done)}
 
 
+LABELS = {"signal": "AI (own levels)", "mirror": "AI flipped", "always_short": "always SHORT",
+          "always_long": "always LONG", "random": "random side",
+          "fixed_ai": "AI direction", "fixed_flipped": "AI flipped", "fixed_short": "always SHORT",
+          "fixed_long": "always LONG", "fixed_random": "random side"}
+
+
+def table(variants, ai_key, controls, heading):
+    print(f"\n--- {heading} ---")
+    print(f"{'variant':16s}{'trades':>7s}{'%short':>8s}{'win%':>6s}{'PF':>6s}{'avg/trade (±SE)':>20s}{'total':>9s}")
+    for v in [ai_key] + controls:
+        x = stats(variants[v])
+        if x:
+            print(f"{LABELS[v]:16s}{x['n']:7d}{x['shorts']:8.0%}{x['win']:6.0%}{x['pf']:6.2f}"
+                  f"{x['avg']:+12.2f}% ±{x['se']:4.2f}{x['total']:+9.0f}%")
+    print("AI minus control, per signal (z>2 = unlikely to be luck):")
+    for v in controls:
+        diffs = [p["ret_alloc"] - q["ret_alloc"] for p, q in zip(variants[ai_key], variants[v])]
+        if len(diffs) > 1:
+            m, se = statistics.mean(diffs), statistics.stdev(diffs) / len(diffs) ** 0.5
+            print(f"  vs {LABELS[v]:14s} {m:+6.2f}% ± {se:4.2f}   z = {m / se if se else 0:+.1f}")
+
+
 def report(variants):
     sig = variants["signal"]
     st = stats(sig)
@@ -195,20 +224,11 @@ def report(variants):
         return
     print(f"AI trades: {st['n']} | TP {st['tp']} | SL {st['sl']} | expired {st['expired']} | "
           f"avg win {st['avg_win']:+.1f}% | avg loss {st['avg_loss']:+.1f}%")
-    print(f"\n{'variant':14s}{'trades':>7s}{'%short':>8s}{'win%':>6s}{'PF':>6s}{'avg/trade (±SE)':>20s}{'total':>9s}")
-    labels = {"signal": "AI", "mirror": "AI flipped", "always_short": "always SHORT",
-              "always_long": "always LONG", "random": "random side"}
-    for v, rows in variants.items():
-        x = stats(rows)
-        if x:
-            print(f"{labels[v]:14s}{x['n']:7d}{x['shorts']:8.0%}{x['win']:6.0%}{x['pf']:6.2f}"
-                  f"{x['avg']:+12.2f}% ±{x['se']:4.2f}{x['total']:+9.0f}%")
-    print("\nAI minus control, per signal, same points and same ladder geometry (z>2 = unlikely to be luck):")
-    for v in ("mirror", "always_short", "always_long", "random"):
-        diffs = [a["ret_alloc"] - b["ret_alloc"] for a, b in zip(sig, variants[v])]
-        if len(diffs) > 1:
-            m, se = statistics.mean(diffs), statistics.stdev(diffs) / len(diffs) ** 0.5
-            print(f"  vs {labels[v]:13s} {m:+6.2f}% ± {se:4.2f}   z = {m / se if se else 0:+.1f}")
+    table(variants, "signal", ["mirror", "always_short", "always_long", "random"],
+          "TEST 1: the AI's own entries/TP/SL vs controls with the same ladder shape")
+    table(variants, "fixed_ai", ["fixed_flipped", "fixed_short", "fixed_long", "fixed_random"],
+          "TEST 2: direction only (AI long/short on one standard ladder) vs controls on the same ladder")
+    print("\nTest 2 isolates whether the AI picks direction well; Test 1 also includes how good its levels are.")
     print("Trades overlap in time, so true uncertainty is larger than these SEs suggest.")
 
 
@@ -224,6 +244,9 @@ def main():
     ap.add_argument("--source", choices=["futures", "spot"], default="futures")
     ap.add_argument("--out", default="backtest_results.csv")
     ap.add_argument("--yes", action="store_true", help="confirm spending AI calls")
+    ap.add_argument("--end-days-ago", type=int, default=0, help="end the window this many days ago (test an earlier market)")
+    ap.add_argument("--fx-tp", type=float, default=1.5, help="Test 2: take-profit distance in ATR")
+    ap.add_argument("--fx-sl", type=float, default=1.6, help="Test 2: stop distance in ATR")
     ap.add_argument("--only", choices=["claude", "gemini"], help="test just one AI instead of the pair")
     a = ap.parse_args()
     if a.only:  # drop the other AI's key so bot.ask_ai uses a single AI
@@ -231,7 +254,7 @@ def main():
 
     tf = TF_MS[bot.TIMEFRAME]
     step, expiry = max(1, a.step_hours * 3_600_000 // tf), a.expiry_hours * 3_600_000 // tf
-    end = int(time.time() * 1000)
+    end = int(time.time() * 1000) - a.end_days_ago * 86_400_000
     start = end - a.days * 86_400_000 - WARMUP * tf
     symbols = [s.strip().upper() for s in a.symbols.split(",")] if a.symbols else bot.list_symbols()[:a.coins]
     cache = load_cache() if a.ai == "bot" else {}
@@ -245,15 +268,18 @@ def main():
             print(f"skip {sym}: {ex}")
             continue
         data[sym] = c
-        points += [(sym, i) for i in range(WARMUP - 1, len(c) - expiry - 1, step)]
+        # sample on fixed UTC clock times so cached AI answers are reused between runs
+        points += [(sym, i) for i in range(WARMUP - 1, len(c) - expiry - 1) if c[i]["t"] % (step * tf) == 0]
     new = [p for p in points if f"{p[0]}|{data[p[0]][p[1]]['t']}|{ais}" not in cache]
-    print(f"{len(symbols)} coins, {len(points)} signal points ({a.days}d, every {a.step_hours}h), mode={a.ai}")
+    day = lambda ms: time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+    print(f"{len(symbols)} coins, {len(points)} signal points ({day(end - a.days * 86_400_000)} to {day(end)},"
+          f" every {a.step_hours}h), mode={a.ai}")
     if a.ai == "bot":
         print(f"{len(new)} points need AI calls ({len(new) * len(bot.enabled_ais())} requests)")
         if new and not a.yes:
             sys.exit("Re-run with --yes to spend them (results are cached, so a stop/resume costs nothing extra).")
 
-    variants = {v: [] for v in ("signal", "mirror", "always_short", "always_long", "random")}
+    variants = {v: [] for v in LABELS}
     for n, (sym, i) in enumerate(points, 1):
         c = data[sym]
         snap = bot.snapshot_from_candles(sym, c[i - WARMUP + 1:i + 1])
@@ -272,6 +298,10 @@ def main():
                   "always_short": with_side(sig, price, "SHORT"),
                   "always_long": with_side(sig, price, "LONG"),
                   "random": with_side(sig, price, random.Random(f"{sym}{t}").choice(["LONG", "SHORT"]))}
+        rnd = random.Random(f"fx{sym}{t}").choice(["LONG", "SHORT"])
+        for v, side in (("fixed_ai", sig["side"]), ("fixed_flipped", opposite), ("fixed_short", "SHORT"),
+                        ("fixed_long", "LONG"), ("fixed_random", rnd)):
+            trades[v] = fixed_trade(side, price, snap["atr14"], a.fx_tp, a.fx_sl)
         for v, tr in trades.items():
             res = simulate(tr["side"], tr["entries"], tr["tp"], tr["sl"], fwd, a.fee)
             variants[v].append({**base, "side": tr["side"], "entries": tr["entries"], "tp": tr["tp"],

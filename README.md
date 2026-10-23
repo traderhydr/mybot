@@ -30,3 +30,7 @@ Results are cached in `backtest_cache.jsonl` (stop/resume safely) and written to
 controls on the same points with the same ladder geometry: AI flipped, always SHORT, always LONG and a random side,
 and prints a paired AI-minus-control comparison with a z-score. Use `--only claude|gemini` to test a single AI.
 Caveats: candle-level simulation, no slippage/funding, SL wins ties, use recent data (after the AI models' training cutoff).
+
+Backtest options: `--end-days-ago N` tests an earlier window (e.g. `--days 14 --end-days-ago 14`); `--fx-tp/--fx-sl` set the
+Test 2 ladder (ATR multiples). Test 1 = the AI's own levels vs controls; Test 2 = only its long/short choice on one standard
+ladder vs the same controls (is the direction any good?). Sampling is aligned to UTC clock times so the cache is reused.
