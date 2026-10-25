@@ -164,7 +164,8 @@ class ClaudeCache(unittest.TestCase):
             d2 = b2.claude_decision("sys", "prompt")
         self.assertEqual((m.call_count, d1, d2), (1, d2, d1))
         self.assertEqual(d1["action"], "NO_TRADE")
-        self.assertEqual(len(open(b2.CACHE_FILE).read().splitlines()), 1)
+        with open(b2.CACHE_FILE) as fh:
+            self.assertEqual(len(fh.read().splitlines()), 1)
         b2._cache.clear()
         b2.load_cache()                          # survives a restart
         with mock.patch("llm.ask_claude", side_effect=AssertionError("must not call")):

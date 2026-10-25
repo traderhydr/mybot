@@ -166,9 +166,10 @@ _cache, _cache_lock = {}, threading.Lock()
 
 def load_cache():
     try:
-        for line in open(CACHE_FILE):
-            d = json.loads(line)
-            _cache[d["k"]] = d["d"]
+        with open(CACHE_FILE) as fh:
+            for line in fh:
+                d = json.loads(line)
+                _cache[d["k"]] = d["d"]
     except (OSError, ValueError, KeyError):
         pass
 
@@ -280,6 +281,7 @@ def run_coin(symbol, prepared, hist, cfg, mode, a):
                 pid = state.add_position(sig, T - 1)  # lock this coin until the simulated position ends
                 pending = {"pid": pid, "outcome": res["outcome"], "ret_dep": res["ret_dep"],
                            "closed_at": T + res["bars"] * tf}
+    state.db.close()
     return rows, funnel, rejects
 
 
@@ -392,6 +394,12 @@ def main(argv=None):
                 for r in rs:
                     w.writerow({**r, "variant": v})
     bt1.report(variants)
+    if len(rows) >= 20:  # the pass bar needs an edge in BOTH halves of the window, not just overall
+        ts = sorted(r["t"] for r in rows)
+        mid = ts[len(ts) // 2]
+        for name, keep in (("FIRST half", lambda r: r["t"] < mid), ("SECOND half", lambda r: r["t"] >= mid)):
+            half = {v: [r for r in rs if keep(r)] for v, rs in variants.items()}
+            bt1.table(half, "fixed_ai", ["fixed_short", "fixed_long", "fixed_random"], f"TEST 2 (direction only), {name}: {len(half['fixed_ai'])} signals")
     print(f"\nrows saved to {a.out}. Same caveats as backtest.py; open interest/funding are as-of the sample time.")
 
 
