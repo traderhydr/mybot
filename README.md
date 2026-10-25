@@ -50,3 +50,16 @@ Adds what v1 was blind to. Modules: `ingest.py` (data + metrics), `state.py` (SQ
   R:R, stop width) and builds the 4-entry ladder / single TP / SL itself. (If several models are ever configured, they must agree on the action.)
 - **Run:** `STRATEGY=v2 python bot.py --dry --limit 3` (no posting, in-memory state), then drop `--dry`. Tests: `python -m unittest test_v2`.
 - **Not validated:** v2 has not been backtested; earlier v1 backtests showed no edge. Treat it as a hypothesis and keep Cornix on demo.
+
+## v2 backtest (`backtest_v2.py`)
+Replays the *live* v2 code (ingest -> decision -> state locks) on history with no look-ahead (a client that only sees data
+closed/available at each sample time; open interest is usable one period after its timestamp), then simulates the 4-entry
+ladder with the same pessimistic rules as `backtest.py`. Locks/cooldowns run on simulated time, so a coin with an open
+simulated position is skipped just like live. Prints a funnel (points / locked / RVOL gate / asked / NO_TRADE / rejected /
+signals + top rejection reasons), the controls table and the paired AI-minus-control z-scores.
+```
+python backtest_v2.py --ai rule   --coins 15 --days 28        # free: same gates, direction = 4h structure bias (no LLM)
+python backtest_v2.py --ai claude --coins 15 --days 28        # prints the planned Claude calls; add --yes to run them
+```
+Open-interest history only exists for ~30 days: `--days + --end-days-ago <= 29`. Claude answers are cached by prompt hash
+(`backtest_v2_cache.jsonl`), so reruns, rule tweaks and interrupted runs cost nothing extra.

@@ -23,6 +23,21 @@ class DataError(Exception):
     """Market data could not be fetched or is unusable. Callers skip the symbol; they never trade on it."""
 
 
+def parse_kline_rows(rows, symbol="?", now_ms=None):
+    """Binance kline rows -> candle dicts, dropping any candle that has not closed yet."""
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    out = []
+    try:
+        for k in rows:
+            if int(k[6]) >= now:
+                continue
+            out.append({"t": int(k[0]), "o": float(k[1]), "h": float(k[2]), "l": float(k[3]),
+                        "c": float(k[4]), "v": float(k[5]), "tb": float(k[9])})
+    except (IndexError, TypeError, ValueError) as ex:
+        raise DataError(f"malformed klines for {symbol}") from ex
+    return out
+
+
 # ---------------------------------------------------------------- Binance client
 
 class BinanceClient:
@@ -70,18 +85,8 @@ class BinanceClient:
 
     def klines(self, symbol, interval, limit):
         """Closed candles only (the still-forming last candle is dropped)."""
-        rows = self.get("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
-        now = int(time.time() * 1000)
-        out = []
-        try:
-            for k in rows:
-                if int(k[6]) >= now:
-                    continue
-                out.append({"t": int(k[0]), "o": float(k[1]), "h": float(k[2]), "l": float(k[3]),
-                            "c": float(k[4]), "v": float(k[5]), "tb": float(k[9])})
-        except (IndexError, TypeError, ValueError) as ex:
-            raise DataError(f"malformed klines for {symbol}") from ex
-        return out
+        return parse_kline_rows(self.get("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit}),
+                                symbol)
 
     def universe(self, symbols, max_coins=0, min_volume=0.0):
         """Tradable USDT perpetuals, most-traded first. `symbols` = ['ALL'] or an explicit list."""

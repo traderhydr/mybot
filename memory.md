@@ -55,3 +55,5 @@ Execution is done by **Cornix** (on a demo account first). The bot only posts si
     funding/OI were not reachable from the dev environment, so run `--dry --limit 3` on the server first. NOT backtested.
 
 19. **Gemini removed entirely** (free-tier quota kept failing; Claude-only). llm.py now only has Claude; bot.py v1, backtest.py, docs and Modal setup updated. Old backtest cache keys are migrated on load.
+
+20. **v2 backtest built** (backtest_v2.py, test_bt2.py): live code path on point-in-time data, simulated locks, funnel + controls + paired z-scores. Smoke-tested on spot candles with the no-LLM rule baseline (118 signals/8 coins/28d: no edge). The Claude run on futures data (funding/OI) still needs to be run on the server.

@@ -6,3 +6,5 @@ backtest_results.csv
 bot_state.db
 bot_state.db-*
 __pycache__/
+backtest_v2_cache.jsonl
+backtest_v2_results.csv
