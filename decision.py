@@ -28,7 +28,7 @@ class Rules:
     ladder_step_atr: float = 0.2
 
 
-SYSTEM_INSTRUCTIONS = """You are a disciplined crypto-futures analyst. You receive ONE JSON payload describing a single
+_INSTRUCTIONS_TEMPLATE = """You are a disciplined crypto-futures analyst. You receive ONE JSON payload describing a single
 perpetual contract and must decide whether to open a trade now. Reply with a single JSON object and nothing else.
 
 OUTPUT (strict JSON, exactly these keys):
@@ -45,13 +45,13 @@ For HOLD / NO_TRADE set confidence_score, prices and risk_reward_ratio to 0 and 
 HOLD = a valid setup is forming but its trigger has not printed yet. NO_TRADE = nothing to do.
 
 HARD RULES (any violation means NO_TRADE; the system re-checks these and discards violations):
-1. Volume confirmation: if market_structure.rvol_20 is null or below 1.2, you must answer NO_TRADE.
+1. Volume confirmation: if market_structure.rvol_20 is null or below @RVOL_MIN@, you must answer NO_TRADE.
 2. Only trade a direction listed in bot_state.allowed_directions. If it is empty, answer NO_TRADE.
 3. macro_context.correlation_risk.long == true forbids OPEN_LONG; correlation_risk.short == true forbids OPEN_SHORT.
    Never open an altcoin long while BTC's higher-timeframe state is a bearish rejection or bearish expansion.
-4. Require at least 3 independent confluence factors from different groups (higher-timeframe bias, key zone,
+4. Require at least @MIN_FACTORS@ independent confluence factors from different groups (higher-timeframe bias, key zone,
    lower-timeframe trigger, volume, derivatives positioning). Do not count the same signal twice.
-5. Take-profit and invalidation must be on the correct sides of entry_price, with risk_reward_ratio >= 1.5.
+5. Take-profit and invalidation must be on the correct sides of entry_price, with risk_reward_ratio >= @MIN_RR@.
    Place the invalidation beyond a real structure level (swing, FVG edge, value-area edge), not at a random distance.
 
 HOW TO READ THE DATA:
@@ -63,6 +63,15 @@ HOW TO READ THE DATA:
   A CVD divergence against your direction is a warning. Null fields mean unknown, not neutral.
 - Do not invent data that is not in the payload. If the evidence is mixed, answer NO_TRADE: skipping is a good outcome.
 """
+
+
+def system_instructions(rules):
+    """The system prompt with the configured thresholds filled in, so the model and the code enforce the same numbers."""
+    return (_INSTRUCTIONS_TEMPLATE.replace("@RVOL_MIN@", f"{rules.rvol_min:g}")
+            .replace("@MIN_FACTORS@", str(rules.min_factors)).replace("@MIN_RR@", f"{rules.min_rr:g}"))
+
+
+SYSTEM_INSTRUCTIONS = system_instructions(Rules())  # default-threshold copy (kept for reference/tests)
 
 
 def _round(x, sig=6):

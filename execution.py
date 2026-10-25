@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 import ingest
 import llm
 import notify
-from decision import (DecisionError, Rules, SYSTEM_INSTRUCTIONS, build_payload, build_prompt, build_signal,
-                      enforce_rules, merge_decisions, parse_decision)
+from decision import (DecisionError, Rules, build_payload, build_prompt, build_signal,
+                      enforce_rules, merge_decisions, parse_decision, system_instructions)
 from state import StateManager, advance_position
 
 log = logging.getLogger("exec")
@@ -100,7 +100,7 @@ class ExecutionManager:
         prompt = build_prompt(payload)
         decisions, errors = {}, []
         with ThreadPoolExecutor(len(self.ais)) as pool:  # ask every AI at the same time
-            futs = {name: pool.submit(fn, prompt, system=SYSTEM_INSTRUCTIONS, max_tokens=1200) for name, fn in self.ais.items()}
+            futs = {name: pool.submit(fn, prompt, system=system_instructions(self.cfg.rules), max_tokens=1200) for name, fn in self.ais.items()}
             for name, fut in futs.items():
                 try:
                     decisions[name] = parse_decision(fut.result())

@@ -7,7 +7,7 @@ import unittest
 
 import execution
 import ingest
-from decision import (DecisionError, Rules, build_payload, build_prompt, build_signal, enforce_rules,
+from decision import (DecisionError, Rules, system_instructions, build_payload, build_prompt, build_signal, enforce_rules,
                       merge_decisions, parse_decision)
 from state import StateManager, advance_position
 
@@ -349,6 +349,14 @@ class Decisions(unittest.TestCase):
         self.assertEqual(m["confluence_factors"], ["a", "b", "c", "d"])
         self.assertEqual(merge_decisions({"g": a, "c": dec(action="OPEN_SHORT")})["action"], "NO_TRADE")
         self.assertEqual(merge_decisions({"g": a, "c": dec(action="HOLD")})["action"], "NO_TRADE")
+
+    def test_instructions_follow_configured_thresholds(self):
+        txt = system_instructions(Rules(rvol_min=0.8, min_rr=2.0, min_factors=4))
+        self.assertIn("below 0.8", txt)
+        self.assertIn(">= 2.", txt)
+        self.assertIn("at least 4 independent", txt)
+        self.assertNotIn("@", txt)
+        self.assertIn("below 1.2", system_instructions(Rules()))
 
     def test_payload_shape(self):
         ctx = ctx_fixture(derivatives_positioning={"funding": {"rate": 0.000123456789}}, market_structure={"rvol_20": 1.234567891})
