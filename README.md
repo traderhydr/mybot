@@ -34,3 +34,19 @@ Caveats: candle-level simulation, no slippage/funding, SL wins ties, use recent 
 Backtest options: `--end-days-ago N` tests an earlier window (e.g. `--days 14 --end-days-ago 14`); `--fx-tp/--fx-sl` set the
 Test 2 ladder (ATR multiples). Test 1 = the AI's own levels vs controls; Test 2 = only its long/short choice on one standard
 ladder vs the same controls (is the direction any good?). Sampling is aligned to UTC clock times so the cache is reused.
+
+## v2 engine (`STRATEGY=v2`)
+Adds what v1 was blind to. Modules: `ingest.py` (data + metrics), `state.py` (SQLite positions/cooldowns),
+`decision.py` (prompt, schema, rule gates, ladder), `execution.py` (cycle manager), `llm.py` / `notify.py` (shared).
+- **Ingestion:** entry timeframe (default 15m) + 4h + 1d; RVOL(20); rolling 24h volume profile (POC/VAH/VAL); swing
+  structure (BOS/CHoCH); unmitigated FVGs; liquidity pools (equal highs/lows, prior-day high/low); BTC 1h/4h state
+  (Bullish/Bearish Expansion, Compression, Rejection) with a correlation-risk flag; funding, 1h/4h open-interest delta,
+  positioning regime and CVD divergence.
+- **State machine:** every posted signal is tracked on candles until TP / SL / cancel / expiry. No LLM call while a coin
+  has an open signal or is cooling down, and no direction flip inside the flip window.
+- **Model contract:** JSON in (`macro_context`, `derivatives_positioning`, `market_structure`, `bot_state`), strict JSON out
+  (`action`, `confidence_score`, `confluence_factors`, `invalidation_level`, `entry_price`, `take_profit_levels`,
+  `risk_reward_ratio`, `reasoning`). Code re-checks every hard rule (RVOL >= 1.2, BTC clash, allowed directions, geometry,
+  R:R, stop width) and builds the 4-entry ladder / single TP / SL itself. With two AIs both must agree on the action.
+- **Run:** `STRATEGY=v2 python bot.py --dry --limit 3` (no posting, in-memory state), then drop `--dry`. Tests: `python -m unittest test_v2`.
+- **Not validated:** v2 has not been backtested; earlier v1 backtests showed no edge. Treat it as a hypothesis and keep Cornix on demo.

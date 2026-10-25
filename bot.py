@@ -4,7 +4,6 @@ import json
 import os
 import random
 import sys
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,13 +12,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# LLM clients and Telegram/Cornix output live in their own modules (shared with the v2 engine).
+from llm import (AI_TIMEOUT, CLAUDE_MODEL, GEMINI_COOLDOWN, GEMINI_MODEL, GEMINI_RPM,  # noqa: E402,F401
+                 _extract_json, ask_claude, ask_gemini, enabled_ais, gemini_blocked)
+from notify import LEVERAGE, MARGIN_MODE, fmt, format_message, post  # noqa: E402,F401
+
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHANNEL = os.environ.get("TELEGRAM_CHANNEL_ID", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "180"))
-GEMINI_RPM = float(os.environ.get("GEMINI_RPM", "8"))  # max Gemini requests per minute
-GEMINI_COOLDOWN = int(os.environ.get("GEMINI_COOLDOWN_MINUTES", "30")) * 60  # pause Gemini after it keeps rate-limiting
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-5-5")
 # "ALL" = every USDT perpetual on Binance futures; or a comma list like BTCUSDT,ETHUSDT
 SYMBOLS = [s.strip().upper() for s in os.environ.get("SYMBOLS", "ALL").split(",") if s.strip()]
 MIN_VOLUME = float(os.environ.get("MIN_24H_VOLUME_USDT", "0"))  # skip illiquid coins (0 = keep all)
@@ -28,8 +27,6 @@ COIN_DELAY = float(os.environ.get("COIN_DELAY_SECONDS", "3"))  # pause between c
 TIMEFRAME = os.environ.get("TIMEFRAME", "1h")
 INTERVAL_MIN = int(os.environ.get("INTERVAL_MINUTES", "240"))
 
-LEVERAGE = 10
-MARGIN_MODE = "Cross"
 BINANCE = "https://fapi.binance.com"
 
 
@@ -125,73 +122,6 @@ Snapshots:
 {data}"""
 
 
-def _extract_json(text):
-    return json.loads(text[text.index("{"): text.rindex("}") + 1])
-
-
-_gemini_lock = threading.Lock()
-_gemini_last = [0.0]
-_gemini_blocked_until = [0.0]
-
-
-def _gemini_pace():
-    """Keep Gemini calls at most GEMINI_RPM per minute (free tiers allow only a few)."""
-    with _gemini_lock:
-        gap = 60.0 / GEMINI_RPM - (time.time() - _gemini_last[0])
-        if gap > 0:
-            time.sleep(gap)
-        _gemini_last[0] = time.time()
-
-
-def gemini_blocked():
-    return time.time() < _gemini_blocked_until[0]
-
-
-def ask_gemini(prompt):
-    if gemini_blocked():
-        raise RuntimeError("Gemini cooling down after rate limits")
-    last = None
-    for wait in (0, 20, 45, 90):  # retry overloads (503), rate limits (429) and timeouts
-        time.sleep(wait)
-        _gemini_pace()
-        try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-                headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
-                json={"contents": [{"parts": [{"text": prompt}]}],
-                      "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 2048}},
-                timeout=AI_TIMEOUT)
-            if r.status_code in (429, 500, 502, 503, 504):
-                last = RuntimeError(f"HTTP {r.status_code}")
-                if r.status_code == 429 and r.headers.get("Retry-After", "").isdigit():
-                    time.sleep(min(int(r.headers["Retry-After"]), 120))
-                continue
-            r.raise_for_status()
-            return _extract_json("".join(p.get("text", "") for p in r.json()["candidates"][0]["content"]["parts"]))
-        except requests.exceptions.Timeout as ex:
-            last = ex
-    if "429" in str(last):  # quota is gone: stop hammering it for a while
-        _gemini_blocked_until[0] = time.time() + GEMINI_COOLDOWN
-        print(f"Gemini rate-limited, pausing it for {GEMINI_COOLDOWN // 60} min")
-    raise last
-
-
-def ask_claude(prompt):
-    import anthropic
-    msg = anthropic.Anthropic(timeout=AI_TIMEOUT, max_retries=3).messages.create(
-        model=CLAUDE_MODEL, max_tokens=800, messages=[{"role": "user", "content": prompt}])
-    return _extract_json("".join(b.text for b in msg.content if b.type == "text"))
-
-
-def enabled_ais():
-    ais = {}
-    if os.environ.get("GEMINI_API_KEY"):
-        ais["gemini"] = ask_gemini
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        ais["claude"] = ask_claude
-    return ais
-
-
 def ask_ai(snaps):
     """Ask every configured AI. With two, they must agree on symbol + side; levels are averaged."""
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
@@ -248,45 +178,6 @@ def validate(sig, snaps):
     return sig
 
 
-def fmt(x):
-    """Plain decimal, no thousands separators or exponents (Cornix can't parse those)."""
-    return f"{x:.8f}".rstrip("0").rstrip(".")
-
-
-def format_message(sig):
-    """Cornix-compatible signal format. Keep it plain text with no extra numbers."""
-    base = sig["symbol"][:-4] if sig["symbol"].endswith("USDT") else sig["symbol"]
-    e = sig["entries"]
-    return "\n".join([
-        f"#{base}/USDT",
-        sig["side"].capitalize(),
-        f"Leverage: {MARGIN_MODE} ({LEVERAGE}x)",
-        "",
-        "Entry Targets:",
-        *[f"{i}) {fmt(x)}" for i, x in enumerate(e, 1)],
-        "",
-        "Take-Profit Targets:",
-        f"1) {fmt(sig['tp'])}",
-        "",
-        "Stop Targets:",
-        f"1) {fmt(sig['sl'])}",
-    ])
-
-
-# ---------- telegram ----------
-
-def post(text):
-    for _ in range(3):
-        r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                          json={"chat_id": TG_CHANNEL, "text": text}, timeout=15)
-        if r.status_code == 429:  # Telegram flood limit: wait as told, then retry
-            time.sleep(r.json().get("parameters", {}).get("retry_after", 5) + 1)
-            continue
-        r.raise_for_status()
-        return
-    raise RuntimeError("telegram rate limit")
-
-
 def run_once(dry=False, limit=None):
     """One cycle: analyse every coin and post a signal for each one that gets a valid setup."""
     coins = list_symbols()
@@ -318,6 +209,9 @@ def run_once(dry=False, limit=None):
 
 
 def main():
+    if os.environ.get("STRATEGY", "v1").lower() == "v2":  # multi-timeframe / derivatives engine (execution.py)
+        import execution
+        return execution.main(sys.argv[1:])
     dry = "--dry" in sys.argv
     if not enabled_ais():
         sys.exit("Set GEMINI_API_KEY and/or ANTHROPIC_API_KEY (see .env.example)")

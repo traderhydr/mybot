@@ -38,3 +38,18 @@ Execution is done by **Cornix** (on a demo account first). The bot only posts si
 ## Notes
 - Never paste API keys or tokens into chat or commit them; `.env` is git-ignored.
 - Signals are AI-generated and not financial advice; stay on the demo account until results are proven.
+
+## Later steps (Oct 20-25)
+14. **Haiku as the Claude model; Gemini free quota** keeps running out -> circuit breaker + `GEMINI_RPM` pacing (llm.py).
+15. **Live results on Cornix demo (Oct 19-22):** ~22 closed signals, ~30% win rate, avg win ~+31% vs avg loss ~-16% (about break-even
+    to slightly negative); stops clustered on short signals when the market bounced; same coin re-signalled while open.
+16. **Backtest harness (backtest.py):** replays the real prompt/validation on past candles, simulates the ladder (SL wins ties,
+    fees, 48h expiry) and compares against controls (flipped, always SHORT/LONG, random side) on the same ladder shape, plus a
+    direction-only test on one standard ladder. `--only claude|gemini`, `--end-days-ago`, cached in backtest_cache.jsonl.
+17. **Backtest verdict (v1):** Haiku looked good in the recent 14 days (Test 2 z~3 vs always-long, 1.9 vs always-short) but failed
+    the earlier window (-0.84%/trade); Sonnet was worse (-2.47%/trade, z=-2.5 vs always-short). Profit tracked market drift, not
+    skill. Conclusion: no proven edge; demo only.
+18. **v2 engine built** (ingest.py, state.py, decision.py, execution.py, llm.py, notify.py, test_v2.py; `STRATEGY=v2`, default v1).
+    Adds RVOL, volume profile, MTF structure/FVG/liquidity, BTC regime + correlation gate, funding/OI/CVD, SQLite state with
+    cooldown and flip lock, strict JSON decision schema with code-side rule enforcement. Unit tests pass; futures endpoints for
+    funding/OI were not reachable from the dev environment, so run `--dry --limit 3` on the server first. NOT backtested.

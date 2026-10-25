@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 backtest_cache.jsonl
 backtest_results.csv
+bot_state.db
+bot_state.db-*
+__pycache__/
