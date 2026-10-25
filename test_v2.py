@@ -424,7 +424,7 @@ class Integration(unittest.TestCase):
 
     def test_full_lifecycle(self):
         calls = []
-        mgr = self.build({"gemini": fake_ai(calls=calls), "claude": fake_ai(calls=calls)})
+        mgr = self.build({"model_a": fake_ai(calls=calls), "model_b": fake_ai(calls=calls)})
         tally = mgr.run_cycle()
         self.assertEqual(len(self.posted), 1, tally)                 # ETH only; SOL fails the RVOL pre-gate
         self.assertEqual(len(calls), 2)                              # one call per AI, none for SOL
@@ -446,16 +446,16 @@ class Integration(unittest.TestCase):
         self.assertEqual(len(self.posted), 1)                         # still cooling down
 
     def test_ai_disagreement_posts_nothing(self):
-        mgr = self.build({"gemini": fake_ai("OPEN_LONG"), "claude": fake_ai("OPEN_SHORT")})
+        mgr = self.build({"model_a": fake_ai("OPEN_LONG"), "model_b": fake_ai("OPEN_SHORT")})
         mgr.run_cycle()
         self.assertEqual(self.posted, [])
         self.assertEqual(self.state.stats(), {})
 
     def test_rules_reject_low_rr_and_bad_reply(self):
-        mgr = self.build({"gemini": fake_ai(tp_mult=0.4, risk_reward_ratio=3)})  # claims 3.0 but really 0.2
+        mgr = self.build({"model_a": fake_ai(tp_mult=0.4, risk_reward_ratio=3)})  # claims 3.0 but really 0.2
         mgr.run_cycle()
         self.assertEqual(self.posted, [])
-        mgr = self.build({"gemini": lambda prompt, system=None, max_tokens=None: {"action": "YOLO"}})
+        mgr = self.build({"model_a": lambda prompt, system=None, max_tokens=None: {"action": "YOLO"}})
         mgr.run_cycle()
         self.assertEqual(self.posted, [])
         self.assertEqual(self.state.stats(), {})
@@ -463,20 +463,20 @@ class Integration(unittest.TestCase):
     def test_ai_outage_does_not_stop_cycle(self):
         def boom(prompt, system=None, max_tokens=None):
             raise TimeoutError("down")
-        mgr = self.build({"gemini": boom})
+        mgr = self.build({"model_a": boom})
         mgr.run_cycle()
         self.assertEqual(self.posted, [])
 
     def test_post_failure_voids_position(self):
         def bad_post(_):
             raise RuntimeError("telegram down")
-        mgr = self.build({"gemini": fake_ai()}, poster=bad_post)
+        mgr = self.build({"model_a": fake_ai()}, poster=bad_post)
         mgr.run_cycle()
         self.assertEqual(self.state.stats(), {"FAILED": 1})
         self.assertFalse(self.state.lock_status("ETHUSDT")["locked"])  # can retry next cycle
 
     def test_btc_clash_blocks_altcoin_short(self):
-        mgr = self.build({"gemini": fake_ai("OPEN_SHORT")})  # BTC fixture is a bullish expansion
+        mgr = self.build({"model_a": fake_ai("OPEN_SHORT")})  # BTC fixture is a bullish expansion
         mgr.run_cycle()
         self.assertEqual(self.posted, [])
         rejected = [r["detail"] for r in self.state.db.execute("SELECT detail FROM events WHERE kind='REJECTED'")]

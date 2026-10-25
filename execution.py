@@ -70,7 +70,7 @@ class ExecutionManager:
         self._stop_evt = threading.Event()
         self._sleep = sleep or self._stop_evt.wait  # interruptible by SIGTERM
         if not self.ais:
-            raise SystemExit("Set GEMINI_API_KEY and/or ANTHROPIC_API_KEY")
+            raise SystemExit("Set ANTHROPIC_API_KEY")
 
     def stop(self, *_):
         self._stop_evt.set()

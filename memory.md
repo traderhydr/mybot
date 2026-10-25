@@ -53,3 +53,5 @@ Execution is done by **Cornix** (on a demo account first). The bot only posts si
     Adds RVOL, volume profile, MTF structure/FVG/liquidity, BTC regime + correlation gate, funding/OI/CVD, SQLite state with
     cooldown and flip lock, strict JSON decision schema with code-side rule enforcement. Unit tests pass; futures endpoints for
     funding/OI were not reachable from the dev environment, so run `--dry --limit 3` on the server first. NOT backtested.
+
+19. **Gemini removed entirely** (free-tier quota kept failing; Claude-only). llm.py now only has Claude; bot.py v1, backtest.py, docs and Modal setup updated. Old backtest cache keys are migrated on load.

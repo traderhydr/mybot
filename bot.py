@@ -1,4 +1,4 @@
-"""AI trade-signal bot: Gemini and Claude analyse every Binance futures coin and post
+"""AI trade-signal bot: Claude analyses every Binance futures coin and posts
 signals (4 entries, 1 TP, SL, cross 10x) to a Telegram channel."""
 import json
 import os
@@ -13,8 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # LLM clients and Telegram/Cornix output live in their own modules (shared with the v2 engine).
-from llm import (AI_TIMEOUT, CLAUDE_MODEL, GEMINI_COOLDOWN, GEMINI_MODEL, GEMINI_RPM,  # noqa: E402,F401
-                 _extract_json, ask_claude, ask_gemini, enabled_ais, gemini_blocked)
+from llm import AI_TIMEOUT, CLAUDE_MODEL, _extract_json, ask_claude, enabled_ais  # noqa: E402,F401
 from notify import LEVERAGE, MARGIN_MODE, fmt, format_message, post  # noqa: E402,F401
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -126,8 +125,6 @@ def ask_ai(snaps):
     """Ask every configured AI. With two, they must agree on symbol + side; levels are averaged."""
     prompt = PROMPT.format(lev=LEVERAGE, data=json.dumps(snaps, indent=1))
     ais = enabled_ais()
-    if "gemini" in ais and gemini_blocked():  # don't pay for Claude when the pair can't complete
-        raise ValueError("Gemini cooling down, skipping")
     with ThreadPoolExecutor(len(ais)) as pool:  # ask all AIs at the same time
         futures = {name: pool.submit(fn, prompt) for name, fn in ais.items()}
         sigs = {}
@@ -214,7 +211,7 @@ def main():
         return execution.main(sys.argv[1:])
     dry = "--dry" in sys.argv
     if not enabled_ais():
-        sys.exit("Set GEMINI_API_KEY and/or ANTHROPIC_API_KEY (see .env.example)")
+        sys.exit("Set ANTHROPIC_API_KEY (see .env.example)")
     print("AIs:", ", ".join(enabled_ais()))
     if not dry and not (TG_TOKEN and TG_CHANNEL):
         sys.exit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID (see .env.example)")

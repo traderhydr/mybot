@@ -4,7 +4,7 @@ For many (coin, time) points it builds the same snapshot the live bot sees, asks
 prompt and validation, then simulates the 4-entry ladder / TP / SL on the candles that follow.
 
 Examples:
-  python backtest.py --ai bot --only claude --coins 5 --days 10 --yes   # one AI only (no Gemini quota needed)
+  python backtest.py --ai bot --coins 5 --days 10 --yes
   python backtest.py --ai rule --days 30                       # free baseline (no AI calls)
   python backtest.py --ai bot --coins 10 --days 14 --step-hours 12 --yes
 Results are cached in backtest_cache.jsonl so an interrupted run resumes without paying twice.
@@ -141,9 +141,6 @@ def ai_signal(snap, cache, key):
         return cache[key]
     hard, soft = 0, 0
     while hard < 2 and soft < 6:
-        while "gemini" in bot.enabled_ais() and bot.gemini_blocked():
-            print("  waiting out Gemini cooldown...")
-            time.sleep(60)
         try:
             sig = bot.validate(bot.ask_ai([snap]), [snap])
             break
@@ -169,7 +166,7 @@ def load_cache():
         for line in open(CACHE_FILE):
             try:
                 d = json.loads(line)
-                cache[d["k"]] = d["sig"]
+                cache[d["k"].replace("|gemini-3.8-flash|", "|")] = d["sig"]  # keys written before Gemini was removed
             except Exception:
                 pass
     return cache
@@ -247,10 +244,7 @@ def main():
     ap.add_argument("--end-days-ago", type=int, default=0, help="end the window this many days ago (test an earlier market)")
     ap.add_argument("--fx-tp", type=float, default=1.5, help="Test 2: take-profit distance in ATR")
     ap.add_argument("--fx-sl", type=float, default=1.6, help="Test 2: stop distance in ATR")
-    ap.add_argument("--only", choices=["claude", "gemini"], help="test just one AI instead of the pair")
     a = ap.parse_args()
-    if a.only:  # drop the other AI's key so bot.ask_ai uses a single AI
-        os.environ.pop("GEMINI_API_KEY" if a.only == "claude" else "ANTHROPIC_API_KEY", None)
 
     tf = TF_MS[bot.TIMEFRAME]
     step, expiry = max(1, a.step_hours * 3_600_000 // tf), a.expiry_hours * 3_600_000 // tf
@@ -258,7 +252,7 @@ def main():
     start = end - a.days * 86_400_000 - WARMUP * tf
     symbols = [s.strip().upper() for s in a.symbols.split(",")] if a.symbols else bot.list_symbols()[:a.coins]
     cache = load_cache() if a.ai == "bot" else {}
-    ais = ",".join(sorted(bot.enabled_ais())) + f"|{bot.GEMINI_MODEL}|{bot.CLAUDE_MODEL}" if a.ai == "bot" else "rule"
+    ais = ",".join(sorted(bot.enabled_ais())) + f"|{bot.CLAUDE_MODEL}" if a.ai == "bot" else "rule"
 
     data, points = {}, []
     for sym in symbols:
