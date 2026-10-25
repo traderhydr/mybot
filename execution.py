@@ -124,7 +124,7 @@ class ExecutionManager:
         decision, _ = self._ask(ctx, lock)
         if decision["action"] in ("HOLD", "NO_TRADE"):
             self.state.log_event(decision["action"], symbol, decision["reasoning"])
-            return f"{decision['action']}: {decision['reasoning'][:90]}"
+            return f"{decision['action']}: {decision['reasoning'][:240]}"
         bad = enforce_rules(decision, ctx, lock, self.cfg.rules)
         if bad:
             self.state.log_event("REJECTED", symbol, "; ".join(bad))
